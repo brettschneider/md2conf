@@ -45,6 +45,7 @@ class Arguments(argparse.Namespace):
     render_mermaid: bool
     render_latex: bool
     diagram_output_format: Literal["png", "svg"]
+    diagram_background_color: str
     local: bool
     headers: dict[str, str]
     webui_links: bool
@@ -217,6 +218,13 @@ def get_parser() -> argparse.ArgumentParser:
         help="Format for rendering Mermaid and draw.io diagrams (default: 'png').",
     )
     parser.add_argument(
+        "--diagram-background-color",
+        dest="diagram_background_color",
+        default="transparent",
+        metavar="COLOR",
+        help="Background color for rendered diagrams (default: 'transparent'). Use 'white' or any valid CSS color.",
+    )
+    parser.add_argument(
         "--prefer-raster",
         dest="prefer_raster",
         action="store_true",
@@ -322,6 +330,7 @@ def main() -> None:
         render_mermaid=args.render_mermaid,
         render_latex=args.render_latex,
         diagram_output_format=args.diagram_output_format,
+        diagram_background_color=args.diagram_background_color,
         webui_links=args.webui_links,
         alignment=args.alignment,
         use_panel=args.use_panel,
