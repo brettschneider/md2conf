@@ -134,7 +134,7 @@ def _serialize_svg_opening_tag(root: ET._Element) -> str:
         if name.startswith("{"):
             ns_end = name.index("}")
             ns_uri = name[1:ns_end]
-            local_name = name[ns_end + 1:]
+            local_name = name[ns_end + 1 :]
             # Find prefix for this namespace
             prefix = None
             for p, u in root.nsmap.items():
