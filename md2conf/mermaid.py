@@ -24,11 +24,9 @@ class MermaidConfigProperties:
     Configuration options for rendering Mermaid diagrams.
 
     :param scale: Scaling factor for the rendered diagram.
-    :param background_color: Background color for the rendered diagram (default: 'transparent').
     """
 
     scale: float | None = None
-    background_color: str = "transparent"
 
 
 def is_docker() -> bool:
@@ -86,7 +84,7 @@ def render_diagram(source: str, output_format: Literal["png", "svg"] = "png", co
         "--outputFormat",
         output_format,
         "--backgroundColor",
-        config.background_color,
+        "transparent",
         "--scale",
         str(config.scale or 2),
         "--svgId",
