@@ -6,6 +6,7 @@ Copyright 2022-2025, Levente Hunyadi
 :see: https://github.com/hunyadi/md2conf
 """
 
+import hashlib
 import logging
 import os
 import os.path
@@ -57,10 +58,22 @@ def has_mmdc() -> bool:
 
 
 def render_diagram(source: str, output_format: Literal["png", "svg"] = "png", config: MermaidConfigProperties | None = None) -> bytes:
-    "Generates a PNG or SVG image from a Mermaid diagram source."
+    """
+    Generates a PNG or SVG image from a Mermaid diagram source.
+
+    For SVG output, a unique ID is generated based on the source content hash.
+    This ensures that when multiple Mermaid diagrams are embedded on the same
+    page, each has unique element IDs and CSS selectors, preventing conflicts.
+    """
 
     if config is None:
         config = MermaidConfigProperties()
+
+    # Generate a unique SVG ID based on content hash to avoid ID conflicts
+    # when multiple diagrams are on the same page. Mermaid uses this ID as
+    # a prefix for all internal element IDs and CSS selectors.
+    source_hash = hashlib.md5(source.encode("utf-8")).hexdigest()[:8]
+    svg_id = f"mermaid-{source_hash}"
 
     cmd = [
         get_mmdc(),
@@ -74,6 +87,8 @@ def render_diagram(source: str, output_format: Literal["png", "svg"] = "png", co
         "transparent",
         "--scale",
         str(config.scale or 2),
+        "--svgId",
+        svg_id,
     ]
     root = os.path.dirname(__file__)
     if is_docker():

@@ -160,9 +160,6 @@ def fix_svg_dimensions(data: bytes) -> bytes:
     This function replaces percentage-based dimensions with explicit pixel values
     derived from the viewBox.
 
-    Note: SVGs containing foreignObject elements are NOT modified, as Confluence
-    has rendering issues with foreignObject when explicit dimensions are set.
-
     Uses lxml to parse and modify the root element's attributes, then replaces
     just the opening tag in the original document to preserve the rest exactly.
 
@@ -172,12 +169,6 @@ def fix_svg_dimensions(data: bytes) -> bytes:
 
     try:
         text = data.decode("utf-8")
-
-        # Skip SVGs with foreignObject - Confluence has issues rendering
-        # foreignObject content when explicit width/height are set on the SVG
-        if "<foreignObject" in text:
-            LOGGER.debug("Skipping dimension fix for SVG with foreignObject elements")
-            return data
 
         # Parse the SVG to extract root element attributes
         root = ET.fromstring(data)
@@ -217,6 +208,20 @@ def fix_svg_dimensions(data: bytes) -> bytes:
         if height_attr is None or height_attr == "100%":
             root.set("height", str(vb_height))
 
+        # Clean up the style attribute - remove max-width which conflicts with explicit width
+        # Mermaid sets style="max-width: Xpx; background-color: transparent;" which can
+        # interfere with Confluence's rendering when we've set explicit dimensions
+        style_attr = root.get("style")
+        if style_attr:
+            # Remove max-width from the style
+            style_parts = [s.strip() for s in style_attr.split(";") if s.strip()]
+            style_parts = [s for s in style_parts if not s.startswith("max-width")]
+            if style_parts:
+                root.set("style", "; ".join(style_parts))
+            else:
+                # Remove empty style attribute
+                del root.attrib["style"]
+
         # Serialize just the opening tag with modified attributes
         new_tag = _serialize_svg_opening_tag(root)
 
@@ -227,6 +232,67 @@ def fix_svg_dimensions(data: bytes) -> bytes:
 
     except Exception as ex:
         LOGGER.warning("Unexpected error fixing SVG dimensions: %s", ex)
+        return data
+
+
+def convert_foreign_object_to_text(data: bytes) -> bytes:
+    """
+    Converts foreignObject elements containing XHTML to native SVG text elements.
+
+    Mermaid uses foreignObject with embedded XHTML for text rendering in some diagram
+    types (ERD, Class diagrams). Confluence cannot render this XHTML content, so this
+    function converts them to native SVG <text> elements.
+
+    :param data: The SVG content as bytes.
+    :returns: The modified SVG content with foreignObject replaced by text elements.
+    """
+
+    try:
+        root = ET.fromstring(data)
+
+        # Find all foreignObject elements
+        foreign_objects = list(root.iter(f"{{{SVG_NAMESPACE}}}foreignObject"))
+        if not foreign_objects:
+            return data  # No foreignObject elements, return unchanged
+
+        for fo in foreign_objects:
+            # Extract text content from the XHTML inside foreignObject
+            text_content = "".join(fo.itertext()).strip()
+            if not text_content:
+                continue
+
+            # Get foreignObject dimensions and position
+            fo_width = float(fo.get("width", "0"))
+            fo_height = float(fo.get("height", "0"))
+            fo_x = float(fo.get("x", "0"))
+            fo_y = float(fo.get("y", "0"))
+
+            # Find the parent group element
+            parent = fo.getparent()
+            if parent is None:
+                continue
+
+            # Create SVG text element at center of foreignObject area
+            # Position at center of the foreignObject box
+            # The parent group's transform will handle the actual positioning
+            text_elem = ET.Element(f"{{{SVG_NAMESPACE}}}text")
+            text_elem.set("x", str(fo_x + fo_width / 2))
+            text_elem.set("y", str(fo_y + fo_height / 2))
+            text_elem.set("dominant-baseline", "middle")
+            text_elem.set("text-anchor", "middle")
+            text_elem.set("style", "font-family: trebuchet ms, verdana, arial, sans-serif; font-size: 12px; fill: #333;")
+            text_elem.text = text_content
+
+            # Replace foreignObject with text element in the parent
+            idx = list(parent).index(fo)
+            parent.remove(fo)
+            parent.insert(idx, text_elem)
+
+        # Serialize back to bytes
+        return ET.tostring(root, encoding="unicode").encode("utf-8")
+
+    except Exception as ex:
+        LOGGER.warning("Error converting foreignObject to text: %s", ex)
         return data
 
 

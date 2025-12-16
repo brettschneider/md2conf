@@ -7,7 +7,10 @@ Copyright 2022-2025, Levente Hunyadi
 """
 
 import logging
+import time
 from pathlib import Path
+
+import requests
 
 from .api import ConfluenceContentProperty, ConfluenceLabel, ConfluenceSession, ConfluenceStatus
 from .converter import ConfluenceDocument, attachment_name, get_volatile_attributes, get_volatile_elements
@@ -170,7 +173,28 @@ class SynchronizingProcessor(Processor):
             skip_attributes=get_volatile_attributes(),
             skip_elements=get_volatile_elements(),
         ):
-            self.api.update_page(page_id.page_id, content, title=title, version=page.version.number + 1)
+            # Retry logic for 409 Conflict errors
+            # These can occur due to Confluence's eventual consistency after attachment uploads
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.api.update_page(page_id.page_id, content, title=title, version=page.version.number + 1)
+                    break  # Success, exit retry loop
+                except requests.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 409 and attempt < max_retries - 1:
+                        # Re-fetch the page to get the latest version
+                        delay = 1.0 * (2**attempt)  # Exponential backoff: 1s, 2s, 4s
+                        LOGGER.warning(
+                            "Version conflict (409) on page %s, retrying in %.1fs (attempt %d/%d)",
+                            page_id.page_id,
+                            delay,
+                            attempt + 1,
+                            max_retries,
+                        )
+                        time.sleep(delay)
+                        page = self.api.get_page(page_id.page_id)
+                    else:
+                        raise  # Re-raise if not a 409 or if we've exhausted retries
         else:
             LOGGER.info("Up-to-date page: %s", page_id.page_id)
 

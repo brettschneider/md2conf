@@ -35,7 +35,7 @@ from .mermaid import MermaidConfigProperties
 from .metadata import ConfluenceSiteMetadata
 from .scanner import MermaidScanner, ScannedDocument, Scanner
 from .serializer import JsonType
-from .svg import fix_svg_dimensions, get_svg_dimensions, get_svg_dimensions_from_bytes
+from .svg import convert_foreign_object_to_text, fix_svg_dimensions, get_svg_dimensions, get_svg_dimensions_from_bytes
 from .toc import TableOfContentsBuilder
 from .uri import is_absolute_url, to_uuid_urn
 from .xml import element_to_text
@@ -984,6 +984,8 @@ class ConfluenceStorageFormatConverter(NodeVisitor):
             if self.options.diagram_output_format == "svg":
                 # Fix SVG to have explicit width/height instead of percentages
                 image_data = fix_svg_dimensions(image_data)
+                # Convert foreignObject to native SVG text for Confluence compatibility
+                image_data = convert_foreign_object_to_text(image_data)
 
                 if attrs.width is None and attrs.height is None:
                     svg_width, svg_height = get_svg_dimensions_from_bytes(image_data)
@@ -1020,6 +1022,8 @@ class ConfluenceStorageFormatConverter(NodeVisitor):
             if self.options.diagram_output_format == "svg":
                 # Fix SVG to have explicit width/height instead of percentages
                 image_data = fix_svg_dimensions(image_data)
+                # Convert foreignObject to native SVG text for Confluence compatibility
+                image_data = convert_foreign_object_to_text(image_data)
 
                 svg_width, svg_height = get_svg_dimensions_from_bytes(image_data)
                 if svg_width is not None or svg_height is not None:
