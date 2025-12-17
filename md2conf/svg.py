@@ -235,6 +235,70 @@ def fix_svg_dimensions(data: bytes) -> bytes:
         return data
 
 
+def _extract_text_lines_from_element(element: ET.Element) -> list[str]:
+    """
+    Recursively extracts text from an element, splitting on <br> tags and newlines.
+
+    Handles:
+    - <br> elements
+    - Actual newline characters
+    - Literal \\n escape sequences (two characters: backslash + n)
+
+    :param element: The XML element to extract text from.
+    :returns: A list of text lines.
+    """
+    lines: list[str] = []
+    current_line: list[str] = []
+
+    def flush_line() -> None:
+        text = "".join(current_line).strip()
+        if text:
+            lines.append(text)
+        current_line.clear()
+
+    def split_on_newlines(text: str) -> list[str]:
+        """Split text on both actual newlines and literal \\n sequences."""
+        # First split on actual newlines, then split each part on literal \n
+        result = []
+        for part in text.split("\n"):
+            # Split on literal \n (backslash followed by n)
+            subparts = part.split("\\n")
+            result.extend(subparts)
+        return result
+
+    def process_element(elem: ET.Element) -> None:
+        # Check if this is a <br> element (in any namespace)
+        local_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if local_name.lower() == "br":
+            flush_line()
+            return
+
+        # Add element's direct text
+        if elem.text:
+            # Split on newlines (both actual and literal \n)
+            parts = split_on_newlines(elem.text)
+            for i, part in enumerate(parts):
+                current_line.append(part)
+                if i < len(parts) - 1:
+                    flush_line()
+
+        # Process children
+        for child in elem:
+            process_element(child)
+            # Add tail text (text after child element)
+            if child.tail:
+                parts = split_on_newlines(child.tail)
+                for i, part in enumerate(parts):
+                    current_line.append(part)
+                    if i < len(parts) - 1:
+                        flush_line()
+
+    process_element(element)
+    flush_line()  # Don't forget the last line
+
+    return lines
+
+
 def convert_foreign_object_to_text(data: bytes) -> bytes:
     """
     Converts foreignObject elements containing XHTML to native SVG text elements.
@@ -242,6 +306,8 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
     Mermaid uses foreignObject with embedded XHTML for text rendering in some diagram
     types (ERD, Class diagrams). Confluence cannot render this XHTML content, so this
     function converts them to native SVG <text> elements.
+
+    Multi-line text (via <br> tags or \\n) is converted to multiple <tspan> elements.
 
     :param data: The SVG content as bytes.
     :returns: The modified SVG content with foreignObject replaced by text elements.
@@ -256,9 +322,9 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
             return data  # No foreignObject elements, return unchanged
 
         for fo in foreign_objects:
-            # Extract text content from the XHTML inside foreignObject
-            text_content = "".join(fo.itertext()).strip()
-            if not text_content:
+            # Extract text lines from the XHTML inside foreignObject
+            lines = _extract_text_lines_from_element(fo)
+            if not lines:
                 continue
 
             # Get foreignObject dimensions and position
@@ -273,15 +339,30 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
                 continue
 
             # Create SVG text element at center of foreignObject area
-            # Position at center of the foreignObject box
-            # The parent group's transform will handle the actual positioning
             text_elem = ET.Element(f"{{{SVG_NAMESPACE}}}text")
-            text_elem.set("x", str(fo_x + fo_width / 2))
-            text_elem.set("y", str(fo_y + fo_height / 2))
-            text_elem.set("dominant-baseline", "middle")
+            center_x = fo_x + fo_width / 2
+            text_elem.set("x", str(center_x))
             text_elem.set("text-anchor", "middle")
             text_elem.set("style", "font-family: trebuchet ms, verdana, arial, sans-serif; font-size: 12px; fill: #333;")
-            text_elem.text = text_content
+
+            # Calculate vertical positioning for multi-line text
+            line_height = 14  # pixels (slightly more than font-size for readability)
+            total_text_height = line_height * len(lines)
+            # Start y so that the block is vertically centered
+            start_y = fo_y + (fo_height - total_text_height) / 2 + line_height * 0.8  # 0.8 adjusts for baseline
+
+            if len(lines) == 1:
+                # Single line: use simple text element centered vertically
+                text_elem.set("y", str(fo_y + fo_height / 2))
+                text_elem.set("dominant-baseline", "middle")
+                text_elem.text = lines[0]
+            else:
+                # Multiple lines: use tspan elements
+                for i, line in enumerate(lines):
+                    tspan = ET.SubElement(text_elem, f"{{{SVG_NAMESPACE}}}tspan")
+                    tspan.set("x", str(center_x))
+                    tspan.set("y", str(start_y + i * line_height))
+                    tspan.text = line
 
             # Replace foreignObject with text element in the parent
             idx = list(parent).index(fo)
