@@ -299,6 +299,71 @@ def _extract_text_lines_from_element(element: ET.Element) -> list[str]:
     return lines
 
 
+def _estimate_text_width(text: str, font_size: float = 12.0) -> float:
+    """
+    Estimates the pixel width of text based on font size.
+
+    Uses an average character width ratio for proportional fonts.
+    This is an approximation since we don't have actual font metrics.
+
+    :param text: The text to measure.
+    :param font_size: The font size in pixels.
+    :returns: Estimated width in pixels.
+    """
+    # Average character width is roughly 0.6x font size for proportional fonts
+    # This works reasonably well for common fonts like Trebuchet MS, Verdana, Arial
+    avg_char_width = font_size * 0.6
+    return len(text) * avg_char_width
+
+
+def _word_wrap_text(text: str, max_width: float, font_size: float = 12.0) -> list[str]:
+    """
+    Wraps text to fit within a maximum pixel width.
+
+    :param text: The text to wrap.
+    :param max_width: Maximum width in pixels.
+    :param font_size: The font size in pixels.
+    :returns: List of wrapped lines.
+    """
+    if max_width <= 0:
+        return [text]
+
+    # If text already fits, return as-is
+    if _estimate_text_width(text, font_size) <= max_width:
+        return [text]
+
+    words = text.split()
+    if not words:
+        return [text]
+
+    lines = []
+    current_line: list[str] = []
+    current_width = 0.0
+    space_width = _estimate_text_width(" ", font_size)
+
+    for word in words:
+        word_width = _estimate_text_width(word, font_size)
+
+        # Check if adding this word would exceed max width
+        new_width = current_width + (space_width if current_line else 0) + word_width
+
+        if new_width <= max_width or not current_line:
+            # Add word to current line
+            current_line.append(word)
+            current_width = new_width
+        else:
+            # Start a new line
+            lines.append(" ".join(current_line))
+            current_line = [word]
+            current_width = word_width
+
+    # Don't forget the last line
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    return lines
+
+
 def convert_foreign_object_to_text(data: bytes) -> bytes:
     """
     Converts foreignObject elements containing XHTML to native SVG text elements.
@@ -308,6 +373,7 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
     function converts them to native SVG <text> elements.
 
     Multi-line text (via <br> tags or \\n) is converted to multiple <tspan> elements.
+    Long text is automatically word-wrapped to fit within the foreignObject width.
 
     :param data: The SVG content as bytes.
     :returns: The modified SVG content with foreignObject replaced by text elements.
@@ -321,6 +387,8 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
         if not foreign_objects:
             return data  # No foreignObject elements, return unchanged
 
+        font_size = 12.0  # pixels - matches the style we set on text elements
+
         for fo in foreign_objects:
             # Extract text lines from the XHTML inside foreignObject
             lines = _extract_text_lines_from_element(fo)
@@ -333,6 +401,13 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
             fo_x = float(fo.get("x", "0"))
             fo_y = float(fo.get("y", "0"))
 
+            # Word-wrap lines to fit within the foreignObject width
+            # Use slightly less than full width to add some padding
+            wrap_width = fo_width * 0.95 if fo_width > 0 else 0
+            wrapped_lines: list[str] = []
+            for line in lines:
+                wrapped_lines.extend(_word_wrap_text(line, wrap_width, font_size))
+
             # Find the parent group element
             parent = fo.getparent()
             if parent is None:
@@ -343,22 +418,22 @@ def convert_foreign_object_to_text(data: bytes) -> bytes:
             center_x = fo_x + fo_width / 2
             text_elem.set("x", str(center_x))
             text_elem.set("text-anchor", "middle")
-            text_elem.set("style", "font-family: trebuchet ms, verdana, arial, sans-serif; font-size: 12px; fill: #333;")
+            text_elem.set("style", f"font-family: trebuchet ms, verdana, arial, sans-serif; font-size: {font_size}px; fill: #333;")
 
             # Calculate vertical positioning for multi-line text
-            line_height = 14  # pixels (slightly more than font-size for readability)
-            total_text_height = line_height * len(lines)
+            line_height = font_size + 2  # pixels (slightly more than font-size for readability)
+            total_text_height = line_height * len(wrapped_lines)
             # Start y so that the block is vertically centered
             start_y = fo_y + (fo_height - total_text_height) / 2 + line_height * 0.8  # 0.8 adjusts for baseline
 
-            if len(lines) == 1:
+            if len(wrapped_lines) == 1:
                 # Single line: use simple text element centered vertically
                 text_elem.set("y", str(fo_y + fo_height / 2))
                 text_elem.set("dominant-baseline", "middle")
-                text_elem.text = lines[0]
+                text_elem.text = wrapped_lines[0]
             else:
                 # Multiple lines: use tspan elements
-                for i, line in enumerate(lines):
+                for i, line in enumerate(wrapped_lines):
                     tspan = ET.SubElement(text_elem, f"{{{SVG_NAMESPACE}}}tspan")
                     tspan.set("x", str(center_x))
                     tspan.set("y", str(start_y + i * line_height))
